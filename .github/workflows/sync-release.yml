@@ -1,0 +1,47 @@
+name: Sync release
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-release
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mirror the current release
+        run: |
+          version="$(node scripts/sync-release.mjs latest-version)"
+          echo "dictivo.app lists $version"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "v$version is already published here"
+            exit 0
+          fi
+          status="$(node scripts/sync-release.mjs prepare "$version" "$RUNNER_TEMP/release")"
+          echo "$status"
+          if [ "$status" != "ready" ]; then exit 0; fi
+          gh release create "v$version" "$RUNNER_TEMP"/release/files/* \
+            --title "Dictivo $version" \
+            --notes-file "$RUNNER_TEMP/release/notes.md" \
+            --latest
+      - name: Update CHANGELOG.md
+        run: |
+          node scripts/sync-release.mjs changelog > CHANGELOG.md
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Update CHANGELOG.md from dictivo.app"
+          git push
